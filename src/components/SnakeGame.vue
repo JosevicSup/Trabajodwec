@@ -1,7 +1,13 @@
 <template>
-  <div class="snake-container">
+  <div class="snake-container" :class="[activeTheme.class]">
     <header class="game-header">
       <h1 class="game-title">Neo Snake 🐍</h1>
+      
+      <!-- Control de Silencio Premium -->
+      <button class="mute-toggle" @click="toggleMute" :title="muted ? 'Activar sonido' : 'Silenciar'">
+        <span v-if="muted">🔇 MUTED</span>
+        <span v-else>🔊 Retro Sound On</span>
+      </button>
     </header>
 
     <!-- Panel de Puntuación Premium -->
@@ -24,8 +30,8 @@
       </div>
     </div>
 
-    <!-- Canvas de Juego -->
-    <div class="canvas-wrapper">
+    <!-- Canvas de Juego con soporte para temblor de pantalla -->
+    <div class="canvas-wrapper" :class="{ 'shake-active': isShaking }">
       <canvas 
         ref="gameCanvas" 
         width="400" 
@@ -46,10 +52,10 @@
         <button class="primary-btn" @click="resetToMenu">Volver al Menú</button>
       </div>
 
-      <!-- Superposición: Menú de Inicio, Selección de Dificultad y Mapas -->
+      <!-- Superposición: Menú de Inicio, Selección de Dificultad, Mapas y Temas -->
       <div v-if="gameState === 'menu'" class="overlay menu-overlay">
-        <h2>DIFICULTAD Y ESCENARIOS</h2>
-        <p class="overlay-desc">Elige tu nivel de dificultad y el diseño del mapa. ¡Evita los muros y come las frutas especiales antes de que expiren!</p>
+        <h2>DIFICULTAD Y APARIENCIA</h2>
+        <p class="overlay-desc">¡Personaliza tu experiencia de juego arcade al completo antes de empezar!</p>
         
         <div class="settings-panel">
           <!-- Fila 1: Dificultad -->
@@ -83,6 +89,22 @@
               </button>
             </div>
           </div>
+
+          <!-- Fila 3: Temas visuales -->
+          <div class="settings-row">
+            <span class="settings-label">Skin (Diseño):</span>
+            <div class="btn-group">
+              <button 
+                v-for="t in themes" 
+                :key="t.id"
+                class="settings-btn"
+                :class="{ 'active': selectedTheme === t.id }"
+                @click="setTheme(t.id)"
+              >
+                {{ t.name }}
+              </button>
+            </div>
+          </div>
         </div>
 
         <button class="primary-btn" @click="startGame">EMPEZAR A JUGAR</button>
@@ -110,6 +132,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { soundManager } from './SoundManager.js';
 
 const GRID_SIZE = 20; 
 const TILE_COUNT = 20; 
@@ -127,6 +150,54 @@ const maps = [
   { id: 'box', name: 'Caja Cerrada' }
 ];
 
+const themes = [
+  { 
+    id: 'cyberpunk', 
+    name: 'Neon Cyberpunk', 
+    class: 'theme-cyberpunk',
+    colors: {
+      bg: '#050510',
+      grid: 'rgba(255, 0, 127, 0.04)',
+      wall: '#ff0055',
+      snakeHead: '#39ff14',
+      snakeBody: 'rgba(57, 255, 20, 0.8)',
+      normalFood: '#ff007f',
+      goldenFood: '#fbbf24',
+      poisonFood: '#a855f7'
+    }
+  },
+  { 
+    id: 'retro', 
+    name: 'Arcade Green', 
+    class: 'theme-retro',
+    colors: {
+      bg: '#000000',
+      grid: 'rgba(0, 255, 0, 0.05)',
+      wall: '#00cc00',
+      snakeHead: '#00ff00',
+      snakeBody: '#00aa00',
+      normalFood: '#ff3333',
+      goldenFood: '#ffaa00',
+      poisonFood: '#aa00ff'
+    }
+  },
+  { 
+    id: 'pastel', 
+    name: 'Dream Pastel', 
+    class: 'theme-pastel',
+    colors: {
+      bg: '#fafaf9',
+      grid: 'rgba(0, 0, 0, 0.02)',
+      wall: '#94a3b8',
+      snakeHead: '#f472b6',
+      snakeBody: '#fbcfe8',
+      normalFood: '#fb7185',
+      goldenFood: '#fde047',
+      poisonFood: '#c084fc'
+    }
+  }
+];
+
 const gameCanvas = ref(null);
 let ctx = null;
 let gameInterval = null;
@@ -139,20 +210,34 @@ const highScore = ref(parseInt(localStorage.getItem('snake_highscore') || '0'));
 const level = ref(1);
 const difficulty = ref('medium');
 const selectedMap = ref('classic');
+const selectedTheme = ref('cyberpunk');
 const newHighScore = ref(false);
+const muted = ref(soundManager.muted);
 
-// Parámetros del juego
+// Parámetros internos de juego
 let snake = [];
 let direction = 'RIGHT';
 let nextDirection = 'RIGHT';
-let foods = []; // Array de comidas (normal, dorada, podrida)
-let walls = []; // Obstáculos fijos del escenario
+let foods = []; 
+let walls = []; 
 let currentSpeed = 130; 
+
+// Sistema de partículas y efectos visuales
+let particles = [];
+const isShaking = ref(false);
+
+const activeTheme = computed(() => {
+  return themes.find(t => t.id === selectedTheme.value) || themes[0];
+});
 
 const speedDisplay = computed(() => {
   const baseSpeed = difficulties.find(d => d.id === difficulty.value)?.speed || 130;
   return Math.round((baseSpeed / currentSpeed) * 100);
 });
+
+const toggleMute = () => {
+  muted.value = soundManager.toggleMute();
+};
 
 const setDifficulty = (diffId) => {
   difficulty.value = diffId;
@@ -162,19 +247,20 @@ const setMap = (mapId) => {
   selectedMap.value = mapId;
 };
 
-// Generación de obstáculos fijos según mapa
+const setTheme = (themeId) => {
+  selectedTheme.value = themeId;
+};
+
 const generateWalls = () => {
   walls = [];
   if (selectedMap.value === 'cross') {
-    // Cruz estática en el centro del mapa
     for (let i = 4; i < 16; i++) {
-      if (i !== 9 && i !== 10) { // hueco central
+      if (i !== 9 && i !== 10) {
         walls.push({ x: i, y: 9 });
         walls.push({ x: 9, y: i });
       }
     }
   } else if (selectedMap.value === 'box') {
-    // Muro perimetral cerrado
     for (let i = 0; i < TILE_COUNT; i++) {
       walls.push({ x: i, y: 0 });
       walls.push({ x: i, y: TILE_COUNT - 1 });
@@ -184,7 +270,34 @@ const generateWalls = () => {
   }
 };
 
+const triggerScreenShake = () => {
+  isShaking.value = true;
+  setTimeout(() => {
+    isShaking.value = false;
+  }, 350);
+};
+
+const createParticleBurst = (x, y, color) => {
+  const cx = x * GRID_SIZE + GRID_SIZE / 2;
+  const cy = y * GRID_SIZE + GRID_SIZE / 2;
+  for (let i = 0; i < 10; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1 + Math.random() * 3;
+    particles.push({
+      x: cx,
+      y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      size: 2 + Math.random() * 3,
+      alpha: 1,
+      color: color,
+      decay: 0.04 + Math.random() * 0.04
+    });
+  }
+};
+
 const startGame = () => {
+  soundManager.init();
   gameState.value = 'playing';
   score.value = 0;
   level.value = 1;
@@ -192,10 +305,10 @@ const startGame = () => {
   direction = 'RIGHT';
   nextDirection = 'RIGHT';
   foods = [];
+  particles = [];
   
   generateWalls();
 
-  // Posicionar la serpiente en un sitio libre de muros
   if (selectedMap.value === 'box') {
     snake = [
       { x: 5, y: 10 },
@@ -213,7 +326,6 @@ const startGame = () => {
   const activeDiff = difficulties.find(d => d.id === difficulty.value);
   currentSpeed = activeDiff ? activeDiff.speed : 130;
 
-  // Generar primera comida normal
   spawnFood('normal');
   
   if (gameInterval) clearInterval(gameInterval);
@@ -228,7 +340,6 @@ const spawnFood = (type) => {
     const fx = Math.floor(Math.random() * TILE_COUNT);
     const fy = Math.floor(Math.random() * TILE_COUNT);
     
-    // Evitar que aparezca en serpiente, muros o sobre otra comida activa
     const onSnake = snake.some(segment => segment.x === fx && segment.y === fy);
     const onWall = walls.some(w => w.x === fx && w.y === fy);
     const onFood = foods.some(f => f.x === fx && f.y === fy);
@@ -270,28 +381,23 @@ const gameLoop = () => {
   else if (direction === 'UP') head.y -= 1;
   else if (direction === 'DOWN') head.y += 1;
 
-  // Comprobar colisiones con límites o aplicar wrapping según escenario
   if (selectedMap.value === 'classic') {
-    // Traspaso de límites (Wrapping)
     if (head.x < 0) head.x = TILE_COUNT - 1;
     else if (head.x >= TILE_COUNT) head.x = 0;
     if (head.y < 0) head.y = TILE_COUNT - 1;
     else if (head.y >= TILE_COUNT) head.y = 0;
   } else {
-    // En otros mapas, chocar con los bordes de la pantalla mata
     if (head.x < 0 || head.x >= TILE_COUNT || head.y < 0 || head.y >= TILE_COUNT) {
       triggerGameOver();
       return;
     }
   }
 
-  // Colisión con obstáculos estáticos
   if (walls.some(w => w.x === head.x && w.y === head.y)) {
     triggerGameOver();
     return;
   }
 
-  // Colisión con el propio cuerpo
   if (snake.some(segment => segment.x === head.x && segment.y === head.y)) {
     triggerGameOver();
     return;
@@ -299,11 +405,9 @@ const gameLoop = () => {
 
   snake.unshift(head);
 
-  // Limpiar comidas especiales expiradas temporalmente
   const now = Date.now();
   foods = foods.filter(f => !f.expiresAt || now < f.expiresAt);
 
-  // Comprobar si ha ingerido alguna comida
   let eaten = false;
   let foodEatenIndex = foods.findIndex(f => f.x === head.x && f.y === head.y);
 
@@ -315,10 +419,13 @@ const gameLoop = () => {
     const activeDiff = difficulties.find(d => d.id === difficulty.value);
     const mult = activeDiff ? activeDiff.multiplier : 1.0;
 
+    const colors = activeTheme.value.colors;
+
     if (foodItem.type === 'normal') {
+      soundManager.playEatNormal();
+      createParticleBurst(foodItem.x, foodItem.y, colors.normalFood);
       score.value += Math.round(10 * mult);
       
-      // Lanzar probabilidad de comida especial: manzana dorada (15%) o plátano podrido (10%)
       const rand = Math.random();
       if (rand < 0.15) {
         spawnFood('golden');
@@ -326,25 +433,27 @@ const gameLoop = () => {
         spawnFood('poison');
       }
 
-      spawnFood('normal'); // Siempre regenerar manzana normal
+      spawnFood('normal');
 
     } else if (foodItem.type === 'golden') {
-      // Manzana Dorada: Otorga muchos puntos y NO hace crecer la serpiente (ventajosa)
+      soundManager.playEatGolden();
+      createParticleBurst(foodItem.x, foodItem.y, colors.goldenFood);
       score.value += Math.round(30 * mult);
-      snake.pop(); // Removemos el crecimiento que insertó unshift
+      snake.pop(); 
 
     } else if (foodItem.type === 'poison') {
-      // Plátano Podrido: Resta puntos y ENCOGE la serpiente (castigo/ventaja táctica)
+      soundManager.playEatPoison();
+      createParticleBurst(foodItem.x, foodItem.y, colors.poisonFood);
+      triggerScreenShake();
       score.value = Math.max(0, score.value - Math.round(15 * mult));
       if (snake.length > 2) {
-        snake.pop(); // Remueve un segmento extra para encoger
+        snake.pop(); 
         snake.pop(); 
       } else {
         snake.pop();
       }
     }
 
-    // Aceleración dinámica
     const newLevel = Math.floor(score.value / 50) + 1;
     if (newLevel > level.value) {
       level.value = newLevel;
@@ -361,6 +470,8 @@ const gameLoop = () => {
 };
 
 const triggerGameOver = () => {
+  soundManager.playGameOver();
+  triggerScreenShake();
   gameState.value = 'gameover';
   if (gameInterval) clearInterval(gameInterval);
 
@@ -384,11 +495,14 @@ const requestDraw = () => {
 const draw = () => {
   if (!ctx || !gameCanvas.value) return;
 
-  ctx.fillStyle = '#0f172a';
+  const colors = activeTheme.value.colors;
+
+  // Fondo
+  ctx.fillStyle = colors.bg;
   ctx.fillRect(0, 0, 400, 400);
 
   // Rejilla sutil
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+  ctx.strokeStyle = colors.grid;
   ctx.lineWidth = 1;
   for (let i = 0; i <= TILE_COUNT; i++) {
     ctx.beginPath();
@@ -402,13 +516,15 @@ const draw = () => {
     ctx.stroke();
   }
 
-  // Dibujar Obstáculos Fijos (Muros)
-  ctx.fillStyle = '#64748b'; // gris pizarra para muros
+  // Muros
+  ctx.fillStyle = colors.wall;
   walls.forEach(w => {
-    ctx.fillRect(w.x * GRID_SIZE + 1, w.y * GRID_SIZE + 1, GRID_SIZE - 2, GRID_SIZE - 2);
+    ctx.beginPath();
+    ctx.roundRect(w.x * GRID_SIZE + 1, w.y * GRID_SIZE + 1, GRID_SIZE - 2, GRID_SIZE - 2, 4);
+    ctx.fill();
   });
 
-  // Dibujar Comidas Activas
+  // Comidas activas
   foods.forEach(f => {
     ctx.beginPath();
     const centerX = f.x * GRID_SIZE + GRID_SIZE / 2;
@@ -416,24 +532,45 @@ const draw = () => {
     const radius = GRID_SIZE / 2 - 2;
 
     if (f.type === 'normal') {
-      ctx.fillStyle = '#ef4444'; // Rojo manzana
+      ctx.fillStyle = colors.normalFood;
       ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
       ctx.fill();
     } else if (f.type === 'golden') {
-      ctx.fillStyle = '#fbbf24'; // Dorado brillante
-      ctx.arc(centerX, centerY, radius + 1, 0, Math.PI * 2);
+      ctx.fillStyle = colors.goldenFood;
+      // Manzana dorada con pequeño destello visual
+      ctx.arc(centerX, centerY, radius + 1.5, 0, Math.PI * 2);
       ctx.fill();
     } else if (f.type === 'poison') {
-      ctx.fillStyle = '#a855f7'; // Plátano tóxico púrpura
+      ctx.fillStyle = colors.poisonFood;
       ctx.arc(centerX, centerY, radius - 1, 0, Math.PI * 2);
       ctx.fill();
     }
   });
 
-  // Dibujar Serpiente
+  // Dibujar partículas activas
+  particles.forEach((p, idx) => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.alpha -= p.decay;
+    
+    if (p.alpha <= 0) {
+      particles.splice(idx, 1);
+      return;
+    }
+
+    ctx.save();
+    ctx.globalAlpha = p.alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // Serpiente
   snake.forEach((segment, index) => {
     const isHead = index === 0;
-    ctx.fillStyle = isHead ? '#22c55e' : '#4ade80';
+    ctx.fillStyle = isHead ? colors.snakeHead : colors.snakeBody;
     
     const rx = segment.x * GRID_SIZE;
     const ry = segment.y * GRID_SIZE;
@@ -443,7 +580,8 @@ const draw = () => {
       ctx.arc(rx + GRID_SIZE / 2, ry + GRID_SIZE / 2, GRID_SIZE / 2 - 1, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = '#000';
+      // Dibujar ojos
+      ctx.fillStyle = selectedTheme.value === 'pastel' ? '#fff' : '#000';
       ctx.beginPath();
       ctx.arc(rx + 6, ry + 6, 2, 0, Math.PI * 2);
       ctx.arc(rx + 14, ry + 6, 2, 0, Math.PI * 2);
@@ -499,6 +637,7 @@ const handleKeyDown = (e) => {
 </script>
 
 <style scoped>
+/* Contenedor principal adaptable */
 .snake-container {
   display: flex;
   flex-direction: column;
@@ -507,20 +646,58 @@ const handleKeyDown = (e) => {
   max-width: 440px;
   margin: 0 auto;
   padding: 1.5rem;
-  background-color: #1e293b;
   border-radius: 16px;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
   font-family: sans-serif;
-  color: #f8fafc;
+  transition: all 0.3s ease;
+}
+
+/* Modificadores de Temas Visuales */
+.theme-cyberpunk {
+  background-color: #0b0f19;
+  color: #00ffff;
+  border: 2px solid #ff007f;
+  box-shadow: 0 0 20px rgba(255, 0, 127, 0.2);
+}
+.theme-retro {
+  background-color: #050d05;
+  color: #00ff00;
+  border: 2px solid #00ff00;
+  box-shadow: 0 0 15px rgba(0, 255, 0, 0.15);
+}
+.theme-pastel {
+  background-color: #f7f6f5;
+  color: #334155;
+  border: 2px solid #e2e8f0;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.05);
 }
 
 .game-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
   margin-bottom: 0.5rem;
 }
 
 .game-title {
   font-size: 1.6rem;
   margin: 0;
+}
+
+.mute-toggle {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: inherit;
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 0.3rem 0.6rem;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.mute-toggle:hover {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 /* Panel de Puntuación Premium */
@@ -551,6 +728,13 @@ const handleKeyDown = (e) => {
   color: #38bdf8;
 }
 
+.theme-pastel .score-board {
+  background: #f1f1ef;
+}
+.theme-pastel .score-item .value {
+  color: #f472b6;
+}
+
 .canvas-wrapper {
   position: relative;
   width: 400px;
@@ -558,6 +742,32 @@ const handleKeyDown = (e) => {
   border-radius: 8px;
   overflow: hidden;
   border: 2px solid #334155;
+  transition: transform 0.1s ease;
+}
+
+.theme-cyberpunk .canvas-wrapper {
+  border-color: #ff007f;
+}
+.theme-retro .canvas-wrapper {
+  border-color: #00ff00;
+}
+.theme-pastel .canvas-wrapper {
+  border-color: #cbd5e1;
+}
+
+/* Temblor de pantalla (Screen Shake) */
+.shake-active {
+  animation: shake 0.3s cubic-bezier(.36,.07,.19,.97) both;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+@keyframes shake {
+  10%, 90% { transform: translate3d(-1px, 0, 0); }
+  20%, 80% { transform: translate3d(2px, 0, 0); }
+  30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+  40%, 60% { transform: translate3d(4px, 0, 0); }
 }
 
 .game-canvas {
@@ -576,6 +786,10 @@ const handleKeyDown = (e) => {
   backdrop-filter: blur(4px);
   padding: 1.5rem;
   text-align: center;
+}
+
+.theme-pastel .overlay {
+  background: rgba(247, 246, 245, 0.95);
 }
 
 .overlay-desc {
@@ -602,6 +816,11 @@ const handleKeyDown = (e) => {
 .primary-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 16px rgba(34, 197, 94, 0.45);
+}
+
+.theme-cyberpunk .primary-btn {
+  background: linear-gradient(135deg, #00ffff 0%, #ff007f 100%);
+  box-shadow: 0 4px 12px rgba(255, 0, 127, 0.3);
 }
 
 .settings-panel {
@@ -637,10 +856,30 @@ const handleKeyDown = (e) => {
   cursor: pointer;
   transition: all 0.2s;
 }
+.theme-pastel .settings-btn {
+  background: #f1f1ef;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+}
 .settings-btn:hover, .settings-btn.active {
   background-color: #22c55e;
   border-color: #22c55e;
   color: #0f172a;
+}
+.theme-cyberpunk .settings-btn.active {
+  background-color: #00ffff;
+  border-color: #00ffff;
+  color: #050510;
+}
+.theme-retro .settings-btn.active {
+  background-color: #00ff00;
+  border-color: #00ff00;
+  color: #000;
+}
+.theme-pastel .settings-btn.active {
+  background-color: #f472b6;
+  border-color: #f472b6;
+  color: #fff;
 }
 
 .stats-summary {
@@ -650,6 +889,9 @@ const handleKeyDown = (e) => {
 .highlight {
   font-weight: bold;
   color: #38bdf8;
+}
+.theme-pastel .highlight {
+  color: #ec4899;
 }
 .text-red {
   color: #f43f5e;
@@ -694,6 +936,20 @@ const handleKeyDown = (e) => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.theme-cyberpunk .d-btn {
+  background-color: #0b1528;
+  border: 1px solid #00ffff;
+  color: #00ffff;
+}
+.theme-retro .d-btn {
+  background-color: #000;
+  border: 1px solid #00ff00;
+  color: #00ff00;
+}
+.theme-pastel .d-btn {
+  background-color: #e2e8f0;
+  color: #334155;
 }
 .d-btn:active {
   background-color: #475569;
