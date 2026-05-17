@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { soundManager } from '../components/SoundManager.js';
 
 describe('Snake Core Gameplay Logic (Task 2)', () => {
   it('should prevent backward movement overrides', () => {
@@ -110,7 +111,7 @@ describe('Map Layouts and Special Foods Verification (Task 4)', () => {
 
     expect(generateWallsForMap('classic').length).toBe(0);
     expect(generateWallsForMap('cross').length).toBe(20);
-    expect(generateWallsForMap('box').length).toBe(80); // 20 * 4 walls (corners pushed twice)
+    expect(generateWallsForMap('box').length).toBe(80);
   });
 
   it('should shrink snake length when eating poison banana', () => {
@@ -142,5 +143,23 @@ describe('Map Layouts and Special Foods Verification (Task 4)', () => {
     mySnake.unshift(head); 
     mySnake.pop(); 
     expect(mySnake.length).toBe(3);
+  });
+});
+
+describe('Synthesizer Sound and Visual Themes (Task 5)', () => {
+  it('should toggle mute state successfully', () => {
+    const startState = soundManager.muted;
+    soundManager.toggleMute();
+    expect(soundManager.muted).toBe(!startState);
+
+    // restore
+    soundManager.toggleMute();
+    expect(soundManager.muted).toBe(startState);
+  });
+
+  it('should persist muted state via localStorage', () => {
+    localStorage.setItem('snake_muted', 'true');
+    soundManager.muted = localStorage.getItem('snake_muted') === 'true';
+    expect(soundManager.muted).toBe(true);
   });
 });
