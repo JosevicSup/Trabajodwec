@@ -46,14 +46,15 @@
         <button class="primary-btn" @click="resetToMenu">Volver al Menú</button>
       </div>
 
-      <!-- Superposición: Menú de Inicio y Selección de Dificultad -->
+      <!-- Superposición: Menú de Inicio, Selección de Dificultad y Mapas -->
       <div v-if="gameState === 'menu'" class="overlay menu-overlay">
-        <h2>DIFICULTAD Y PUNTUACIÓN</h2>
-        <p class="overlay-desc">Elige tu nivel de desafío. ¡Dificultades más altas otorgan un multiplicador de puntos superior!</p>
+        <h2>DIFICULTAD Y ESCENARIOS</h2>
+        <p class="overlay-desc">Elige tu nivel de dificultad y el diseño del mapa. ¡Evita los muros y come las frutas especiales antes de que expiren!</p>
         
         <div class="settings-panel">
+          <!-- Fila 1: Dificultad -->
           <div class="settings-row">
-            <span class="settings-label">Selecciona Dificultad:</span>
+            <span class="settings-label">Dificultad:</span>
             <div class="btn-group">
               <button 
                 v-for="diff in difficulties" 
@@ -63,6 +64,22 @@
                 @click="setDifficulty(diff.id)"
               >
                 {{ diff.name }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Fila 2: Mapas/Escenarios -->
+          <div class="settings-row">
+            <span class="settings-label">Escenario (Mapa):</span>
+            <div class="btn-group">
+              <button 
+                v-for="m in maps" 
+                :key="m.id"
+                class="settings-btn"
+                :class="{ 'active': selectedMap === m.id }"
+                @click="setMap(m.id)"
+              >
+                {{ m.name }}
               </button>
             </div>
           </div>
@@ -104,6 +121,12 @@ const difficulties = [
   { id: 'insane', name: 'Extremo', speed: 60, multiplier: 3.0 }
 ];
 
+const maps = [
+  { id: 'classic', name: 'Clásico (Sin muros)' },
+  { id: 'cross', name: 'Muros en Cruz' },
+  { id: 'box', name: 'Caja Cerrada' }
+];
+
 const gameCanvas = ref(null);
 let ctx = null;
 let gameInterval = null;
@@ -115,16 +138,17 @@ const score = ref(0);
 const highScore = ref(parseInt(localStorage.getItem('snake_highscore') || '0'));
 const level = ref(1);
 const difficulty = ref('medium');
+const selectedMap = ref('classic');
 const newHighScore = ref(false);
 
-// Parámetros internos de velocidad, dirección, serpiente
+// Parámetros del juego
 let snake = [];
 let direction = 'RIGHT';
 let nextDirection = 'RIGHT';
-let food = { x: 10, y: 10 };
+let foods = []; // Array de comidas (normal, dorada, podrida)
+let walls = []; // Obstáculos fijos del escenario
 let currentSpeed = 130; 
 
-// Cálculo del porcentaje de velocidad mostrado en el panel
 const speedDisplay = computed(() => {
   const baseSpeed = difficulties.find(d => d.id === difficulty.value)?.speed || 130;
   return Math.round((baseSpeed / currentSpeed) * 100);
@@ -134,6 +158,32 @@ const setDifficulty = (diffId) => {
   difficulty.value = diffId;
 };
 
+const setMap = (mapId) => {
+  selectedMap.value = mapId;
+};
+
+// Generación de obstáculos fijos según mapa
+const generateWalls = () => {
+  walls = [];
+  if (selectedMap.value === 'cross') {
+    // Cruz estática en el centro del mapa
+    for (let i = 4; i < 16; i++) {
+      if (i !== 9 && i !== 10) { // hueco central
+        walls.push({ x: i, y: 9 });
+        walls.push({ x: 9, y: i });
+      }
+    }
+  } else if (selectedMap.value === 'box') {
+    // Muro perimetral cerrado
+    for (let i = 0; i < TILE_COUNT; i++) {
+      walls.push({ x: i, y: 0 });
+      walls.push({ x: i, y: TILE_COUNT - 1 });
+      walls.push({ x: 0, y: i });
+      walls.push({ x: TILE_COUNT - 1, y: i });
+    }
+  }
+};
+
 const startGame = () => {
   gameState.value = 'playing';
   score.value = 0;
@@ -141,18 +191,30 @@ const startGame = () => {
   newHighScore.value = false;
   direction = 'RIGHT';
   nextDirection = 'RIGHT';
+  foods = [];
   
-  snake = [
-    { x: 5, y: 10 },
-    { x: 4, y: 10 },
-    { x: 3, y: 10 }
-  ];
+  generateWalls();
 
-  // Configurar velocidad inicial
+  // Posicionar la serpiente en un sitio libre de muros
+  if (selectedMap.value === 'box') {
+    snake = [
+      { x: 5, y: 10 },
+      { x: 4, y: 10 },
+      { x: 3, y: 10 }
+    ];
+  } else {
+    snake = [
+      { x: 3, y: 3 },
+      { x: 2, y: 3 },
+      { x: 1, y: 3 }
+    ];
+  }
+
   const activeDiff = difficulties.find(d => d.id === difficulty.value);
   currentSpeed = activeDiff ? activeDiff.speed : 130;
 
-  spawnFood();
+  // Generar primera comida normal
+  spawnFood('normal');
   
   if (gameInterval) clearInterval(gameInterval);
   gameInterval = setInterval(gameLoop, currentSpeed);
@@ -160,14 +222,24 @@ const startGame = () => {
   requestDraw();
 };
 
-const spawnFood = () => {
+const spawnFood = (type) => {
   let attempts = 0;
   while (attempts < 100) {
     const fx = Math.floor(Math.random() * TILE_COUNT);
     const fy = Math.floor(Math.random() * TILE_COUNT);
+    
+    // Evitar que aparezca en serpiente, muros o sobre otra comida activa
     const onSnake = snake.some(segment => segment.x === fx && segment.y === fy);
-    if (!onSnake) {
-      food = { x: fx, y: fy };
+    const onWall = walls.some(w => w.x === fx && w.y === fy);
+    const onFood = foods.some(f => f.x === fx && f.y === fy);
+
+    if (!onSnake && !onWall && !onFood) {
+      foods.push({
+        x: fx,
+        y: fy,
+        type: type,
+        expiresAt: type === 'normal' ? null : Date.now() + (type === 'golden' ? 5000 : 7000)
+      });
       break;
     }
     attempts++;
@@ -198,13 +270,28 @@ const gameLoop = () => {
   else if (direction === 'UP') head.y -= 1;
   else if (direction === 'DOWN') head.y += 1;
 
-  // Colisión límites
-  if (head.x < 0 || head.x >= TILE_COUNT || head.y < 0 || head.y >= TILE_COUNT) {
+  // Comprobar colisiones con límites o aplicar wrapping según escenario
+  if (selectedMap.value === 'classic') {
+    // Traspaso de límites (Wrapping)
+    if (head.x < 0) head.x = TILE_COUNT - 1;
+    else if (head.x >= TILE_COUNT) head.x = 0;
+    if (head.y < 0) head.y = TILE_COUNT - 1;
+    else if (head.y >= TILE_COUNT) head.y = 0;
+  } else {
+    // En otros mapas, chocar con los bordes de la pantalla mata
+    if (head.x < 0 || head.x >= TILE_COUNT || head.y < 0 || head.y >= TILE_COUNT) {
+      triggerGameOver();
+      return;
+    }
+  }
+
+  // Colisión con obstáculos estáticos
+  if (walls.some(w => w.x === head.x && w.y === head.y)) {
     triggerGameOver();
     return;
   }
 
-  // Colisión cuerpo
+  // Colisión con el propio cuerpo
   if (snake.some(segment => segment.x === head.x && segment.y === head.y)) {
     triggerGameOver();
     return;
@@ -212,16 +299,52 @@ const gameLoop = () => {
 
   snake.unshift(head);
 
-  // Ingestión de comida
-  if (head.x === food.x && head.y === food.y) {
+  // Limpiar comidas especiales expiradas temporalmente
+  const now = Date.now();
+  foods = foods.filter(f => !f.expiresAt || now < f.expiresAt);
+
+  // Comprobar si ha ingerido alguna comida
+  let eaten = false;
+  let foodEatenIndex = foods.findIndex(f => f.x === head.x && f.y === head.y);
+
+  if (foodEatenIndex !== -1) {
+    eaten = true;
+    const foodItem = foods[foodEatenIndex];
+    foods.splice(foodEatenIndex, 1);
+
     const activeDiff = difficulties.find(d => d.id === difficulty.value);
     const mult = activeDiff ? activeDiff.multiplier : 1.0;
-    
-    // Incremento según dificultad
-    score.value += Math.round(10 * mult);
-    spawnFood();
 
-    // Lógica dinámica de niveles y velocidad (+7% velocidad cada 50 puntos)
+    if (foodItem.type === 'normal') {
+      score.value += Math.round(10 * mult);
+      
+      // Lanzar probabilidad de comida especial: manzana dorada (15%) o plátano podrido (10%)
+      const rand = Math.random();
+      if (rand < 0.15) {
+        spawnFood('golden');
+      } else if (rand < 0.25) {
+        spawnFood('poison');
+      }
+
+      spawnFood('normal'); // Siempre regenerar manzana normal
+
+    } else if (foodItem.type === 'golden') {
+      // Manzana Dorada: Otorga muchos puntos y NO hace crecer la serpiente (ventajosa)
+      score.value += Math.round(30 * mult);
+      snake.pop(); // Removemos el crecimiento que insertó unshift
+
+    } else if (foodItem.type === 'poison') {
+      // Plátano Podrido: Resta puntos y ENCOGE la serpiente (castigo/ventaja táctica)
+      score.value = Math.max(0, score.value - Math.round(15 * mult));
+      if (snake.length > 2) {
+        snake.pop(); // Remueve un segmento extra para encoger
+        snake.pop(); 
+      } else {
+        snake.pop();
+      }
+    }
+
+    // Aceleración dinámica
     const newLevel = Math.floor(score.value / 50) + 1;
     if (newLevel > level.value) {
       level.value = newLevel;
@@ -230,7 +353,9 @@ const gameLoop = () => {
       clearInterval(gameInterval);
       gameInterval = setInterval(gameLoop, currentSpeed);
     }
-  } else {
+  }
+
+  if (!eaten) {
     snake.pop();
   }
 };
@@ -239,7 +364,6 @@ const triggerGameOver = () => {
   gameState.value = 'gameover';
   if (gameInterval) clearInterval(gameInterval);
 
-  // Récord local persistente
   if (score.value > highScore.value) {
     highScore.value = score.value;
     localStorage.setItem('snake_highscore', highScore.value.toString());
@@ -278,19 +402,35 @@ const draw = () => {
     ctx.stroke();
   }
 
-  // Comida
-  ctx.fillStyle = '#ef4444';
-  ctx.beginPath();
-  ctx.arc(
-    food.x * GRID_SIZE + GRID_SIZE / 2,
-    food.y * GRID_SIZE + GRID_SIZE / 2,
-    GRID_SIZE / 2 - 2,
-    0,
-    Math.PI * 2
-  );
-  ctx.fill();
+  // Dibujar Obstáculos Fijos (Muros)
+  ctx.fillStyle = '#64748b'; // gris pizarra para muros
+  walls.forEach(w => {
+    ctx.fillRect(w.x * GRID_SIZE + 1, w.y * GRID_SIZE + 1, GRID_SIZE - 2, GRID_SIZE - 2);
+  });
 
-  // Serpiente
+  // Dibujar Comidas Activas
+  foods.forEach(f => {
+    ctx.beginPath();
+    const centerX = f.x * GRID_SIZE + GRID_SIZE / 2;
+    const centerY = f.y * GRID_SIZE + GRID_SIZE / 2;
+    const radius = GRID_SIZE / 2 - 2;
+
+    if (f.type === 'normal') {
+      ctx.fillStyle = '#ef4444'; // Rojo manzana
+      ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (f.type === 'golden') {
+      ctx.fillStyle = '#fbbf24'; // Dorado brillante
+      ctx.arc(centerX, centerY, radius + 1, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (f.type === 'poison') {
+      ctx.fillStyle = '#a855f7'; // Plátano tóxico púrpura
+      ctx.arc(centerX, centerY, radius - 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+
+  // Dibujar Serpiente
   snake.forEach((segment, index) => {
     const isHead = index === 0;
     ctx.fillStyle = isHead ? '#22c55e' : '#4ade80';
@@ -432,17 +572,17 @@ const handleKeyDown = (e) => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(15, 23, 42, 0.93);
+  background: rgba(15, 23, 42, 0.94);
   backdrop-filter: blur(4px);
   padding: 1.5rem;
   text-align: center;
 }
 
 .overlay-desc {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   opacity: 0.7;
-  margin-bottom: 1.2rem;
-  line-height: 1.3;
+  margin-bottom: 1rem;
+  line-height: 1.35;
 }
 
 .primary-btn {
@@ -454,7 +594,7 @@ const handleKeyDown = (e) => {
   padding: 0.7rem 1.6rem;
   border-radius: 20px;
   cursor: pointer;
-  margin-top: 1rem;
+  margin-top: 0.8rem;
   box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
   transition: all 0.2s;
 }
@@ -466,13 +606,16 @@ const handleKeyDown = (e) => {
 
 .settings-panel {
   width: 100%;
-  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
 }
 .settings-row {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.3rem;
 }
 .settings-label {
   font-size: 0.75rem;
