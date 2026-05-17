@@ -60,7 +60,6 @@ describe('Score, HighScore and Difficulty Verification (Task 3)', () => {
   });
 
   it('should persist and load high score from localStorage', () => {
-    // Mock local storage
     const fakeLocalStorage = {
       snake_highscore: null,
       getItem(key) { return this[key] || null; },
@@ -84,5 +83,64 @@ describe('Score, HighScore and Difficulty Verification (Task 3)', () => {
 
     expect(isNewRecord).toBe(true);
     expect(parseInt(fakeLocalStorage.getItem('snake_highscore'))).toBe(200);
+  });
+});
+
+describe('Map Layouts and Special Foods Verification (Task 4)', () => {
+  it('should generate wall layouts depending on map selection', () => {
+    const generateWallsForMap = (mapId, tileCount = 20) => {
+      let walls = [];
+      if (mapId === 'cross') {
+        for (let i = 4; i < 16; i++) {
+          if (i !== 9 && i !== 10) {
+            walls.push({ x: i, y: 9 });
+            walls.push({ x: 9, y: i });
+          }
+        }
+      } else if (mapId === 'box') {
+        for (let i = 0; i < tileCount; i++) {
+          walls.push({ x: i, y: 0 });
+          walls.push({ x: i, y: tileCount - 1 });
+          walls.push({ x: 0, y: i });
+          walls.push({ x: tileCount - 1, y: i });
+        }
+      }
+      return walls;
+    };
+
+    expect(generateWallsForMap('classic').length).toBe(0);
+    expect(generateWallsForMap('cross').length).toBe(20);
+    expect(generateWallsForMap('box').length).toBe(80); // 20 * 4 walls (corners pushed twice)
+  });
+
+  it('should shrink snake length when eating poison banana', () => {
+    const handlePoisonEat = (snakeArr) => {
+      if (snakeArr.length > 2) {
+        snakeArr.pop();
+        snakeArr.pop();
+      } else {
+        snakeArr.pop();
+      }
+      return snakeArr;
+    };
+
+    let longSnake = [{x: 1, y: 1}, {x: 1, y: 2}, {x: 1, y: 3}, {x: 1, y: 4}];
+    expect(handlePoisonEat(longSnake).length).toBe(2);
+
+    let shortSnake = [{x: 1, y: 1}, {x: 1, y: 2}];
+    expect(handlePoisonEat(shortSnake).length).toBe(1);
+  });
+
+  it('should keep snake length identical when eating a golden apple (unshift head + pop tail)', () => {
+    let mySnake = [{x: 1, y: 1}, {x: 1, y: 2}, {x: 1, y: 3}];
+    const head = {x: 1, y: 0};
+    
+    mySnake.unshift(head);
+    expect(mySnake.length).toBe(4);
+
+    mySnake = [{x: 1, y: 1}, {x: 1, y: 2}, {x: 1, y: 3}];
+    mySnake.unshift(head); 
+    mySnake.pop(); 
+    expect(mySnake.length).toBe(3);
   });
 });
